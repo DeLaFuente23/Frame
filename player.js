@@ -5,9 +5,11 @@ let localState = null;
 let worldState = null;
 
 function decode(value) {
-  value = value.replaceAll('-', '+').replaceAll('_', '/');
+  value = String(value || '').replaceAll('-', '+').replaceAll('_', '/');
   while (value.length % 4) value += '=';
-  return JSON.parse(decodeURIComponent(escape(atob(value))));
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 function parseCatalog(text) {
@@ -100,7 +102,8 @@ function orderedMovies() {
 
 function localRole() {
   // starter is the player who guesses in round 1. Roles alternate every round.
-  const guesser = (config.starter + round) % 2;
+  const starter = Number.isInteger(config.starter) ? config.starter : (hash(config.seed) % 2);
+  const guesser = (starter + round) % 2;
   return {
     guesser,
     selector: guesser === 0 ? 1 : 0,
@@ -441,14 +444,16 @@ function home() {
     me = +params.get('p');
     if (!config.players?.[me] || !config.seed) throw Error('link');
 
-    const response = await fetch('movies.txt', { cache: 'no-store' });
+    const response = await fetch(new URL('movies.txt', document.baseURI), { cache: 'no-store' });
     if (!response.ok) throw Error('catalog');
     movies = parseCatalog(await response.text());
-    if (movies.length !== 168) throw Error('catalog-count');
+    if (movies.length !== 168) throw Error(`catalog-count:${movies.length}`);
     loadRound();
     home();
-  } catch {
-    setHeader('Game link unavailable', 'Could not open this game', 'Use a QR code generated from the setup page while the site is being served.');
-    game.innerHTML = '<p class="empty-state">This game link is incomplete or the movie catalog could not be loaded.</p>';
+  } catch (error) {
+    console.error('Frame failed to load:', error);
+    const reason = error?.message || String(error);
+    setHeader('Game link unavailable', 'Could not open this game', 'Check that this QR was generated from the current Frame setup page and that the site is being served.');
+    game.innerHTML = `<p class="empty-state">This game link could not be loaded.<br><span class="small">${esc(reason)}</span></p>`;
   }
 })();

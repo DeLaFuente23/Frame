@@ -50,10 +50,10 @@ function makeSeed() {
 function cards(config) {
   linksList.innerHTML = '';
   const data = encodeConfig(config);
-  const base = location.origin + location.pathname.replace(/index\.html$/, '');
+  const base = new URL('player.html', document.baseURI).href;
 
   players.forEach((name, i) => {
-    const url = `${base}player.html?g=${data}&p=${i}`;
+    const url = `${base}?g=${data}&p=${i}`;
     const li = document.createElement('li');
     const qr = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(url)}`;
     li.className = 'player-card';
@@ -78,7 +78,7 @@ async function start() {
   }
 
   try {
-    const response = await fetch('movies.txt', { cache: 'no-store' });
+    const response = await fetch(new URL('movies.txt', document.baseURI), { cache: 'no-store' });
     if (!response.ok) throw Error('catalog');
 
     // One fresh seed = one fresh shuffle for the entire game. Every player QR carries it,
