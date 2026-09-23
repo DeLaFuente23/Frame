@@ -89,10 +89,9 @@ function grade(answer, movie) {
     best = Math.max(best, matches / Math.max(1, expected.length));
   }
 
-  // A title is correct when at least half of its meaningful words are matched.
-  // This is intentionally forgiving enough for normal party-game answers while
-  // still requiring more than a vague partial resemblance.
-  return best >= 0.5;
+  // A title is correct when at least 90% of its meaningful words are matched.
+  // This allows minor spelling/wording mistakes while requiring a near-complete title.
+  return best >= 0.9;
 }
 
 function setHeader(badge, title, intro) {
@@ -363,7 +362,7 @@ function frameScreen(movie, minute, holder, back = localHome) {
 function finishLocalGuess(movie) {
   const correct = grade($('#answer').value, movie);
   const result = $('#result');
-  result.innerHTML = `<div class="result ${correct ? 'correct' : 'incorrect'}"><strong>${correct ? 'Correct' : 'Incorrect'}</strong></div>`;
+  result.innerHTML = `<div class="result ${correct ? 'correct' : 'incorrect'}"><strong>${correct ? 'Correct' : 'Incorrect'}: ${esc(movie.en)} (${esc(movie.es)})</strong></div>`;
 
   $('#check').disabled = true;
   const reveal = $('#reveal-answer');
@@ -417,7 +416,7 @@ function worldHome() {
   const shot = imgFor(movie, minute);
   worldState = {
     active, movie, minute, shot,
-    submitted: false, submittedAt: null, correct: false, clockStart: null, started: false
+    submitted: false, submittedAt: null, correct: false, clockStart: null, elapsed: 0, started: false
   };
 
   setHeader(
@@ -484,16 +483,17 @@ function startWorldRound() {
 function submitWorldAnswer(movie, dontKnow) {
   if (worldState.submitted) return;
 
-  clearInterval(timerId);
+  freezeWorldClock();
   worldState.submitted = true;
-  worldState.submittedAt = performance.now();
+  worldState.submittedAt = worldState.clockStart + worldState.elapsed;
   worldState.correct = !dontKnow && grade($('#answer').value, movie);
 
-  const elapsed = worldState.submittedAt - worldState.clockStart;
+  const elapsed = worldState.elapsed;
   if (dontKnow) {
     $('#result').innerHTML = `<div class="result incorrect"><strong>${worldState.active === me ? 'No answer' : 'No steal eligibility'}</strong></div>`;
   } else {
-    $('#result').innerHTML = `<div class="result ${worldState.correct ? 'correct' : 'incorrect'}"><strong>${worldState.correct ? 'Correct' : 'Incorrect'}</strong><br><span class="muted">Answer submitted at ${(elapsed / 1000).toFixed(2)}s.</span></div>`;
+    const verdict = worldState.correct ? 'Correct' : 'Incorrect';
+    $('#result').innerHTML = `<div class="result ${worldState.correct ? 'correct' : 'incorrect'}"><strong>${verdict}: ${esc(movie.en)} (${esc(movie.es)})</strong><br><span class="muted">Answer submitted at ${(elapsed / 1000).toFixed(1)}s.</span></div>`;
   }
 
   $('#check').disabled = true;
@@ -501,15 +501,39 @@ function submitWorldAnswer(movie, dontKnow) {
 }
 
 function revealWorld(movie, minute) {
-  clearInterval(timerId);
+  freezeWorldClock();
   $('#result').innerHTML = `<div class="result revealed"><strong>${esc(movie.en)}</strong><br>${esc(movie.es)}<br>Selected time: ${formatTime(minute)} · Frame ${imgFor(movie, minute).number}</div>`;
+}
+
+function freezeWorldClock() {
+  if (!worldState?.clockStart) return 0;
+  const now = performance.now();
+  if (!worldState.submitted) {
+    worldState.elapsed = Math.max(0, now - worldState.clockStart);
+  }
+  clearInterval(timerId);
+  timerId = null;
+
+  const element = $('#timer');
+  if (element) {
+    const elapsed = worldState.elapsed / 1000;
+    if (worldState.active === me) {
+      element.textContent = Math.max(0, 10 - elapsed).toFixed(1);
+    } else {
+      element.textContent = elapsed.toFixed(1);
+    }
+  }
+  return worldState.elapsed;
 }
 
 function startClock(active) {
   clearInterval(timerId);
   worldState.clockStart = performance.now();
+  worldState.elapsed = 0;
   timerId = setInterval(() => {
-    const elapsed = (performance.now() - worldState.clockStart) / 1000;
+    const elapsedMs = performance.now() - worldState.clockStart;
+    worldState.elapsed = elapsedMs;
+    const elapsed = elapsedMs / 1000;
     const element = $('#timer');
     if (!element) return;
 
