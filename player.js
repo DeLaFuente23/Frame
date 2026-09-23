@@ -213,6 +213,84 @@ function selectorWaitingScreen(owner, movie, back) {
   $('#back').onclick = back;
 }
 
+function guessLocal(owner, pool) {
+  game.innerHTML = `
+    <div class="choice-head"><div>
+      <h2>Enter the spoken selection</h2>
+      <p class="muted">${esc(config.players[owner])} should tell you the set and card number. Your phone will not reveal the movie title.</p>
+    </div><span class="player-badge">Guesser</span></div>
+    <div class="time-grid">
+      <div><label for="set">Set (1–12)</label><input id="set" type="number" min="1" max="12" placeholder="1"></div>
+      <div><label for="card">Card (1–7)</label><input id="card" type="number" min="1" max="7" placeholder="1"></div>
+    </div>
+    <div class="actions">
+      <button class="primary-btn" id="continue" type="button">Choose time</button>
+      <button class="secondary-btn" id="back" type="button">Back</button>
+    </div>`;
+
+  $('#back').onclick = localHome;
+  $('#continue').onclick = () => {
+    const setNumber = +$('#set').value;
+    const cardNumber = +$('#card').value;
+    if (!Number.isInteger(setNumber) || !Number.isInteger(cardNumber) || setNumber < 1 || setNumber > 12 || cardNumber < 1 || cardNumber > 7) {
+      alert('Enter a set from 1–12 and a card from 1–7.');
+      return;
+    }
+    const index = (setNumber - 1) * 7 + (cardNumber - 1);
+    const movie = pool[index];
+    if (!movie) {
+      alert('That set/card is not available.');
+      return;
+    }
+    guessTimeScreen(owner, movie, setNumber, cardNumber, () => guessLocal(owner, pool));
+  };
+}
+
+function guessTimeScreen(owner, movie, setNumber, cardNumber, back) {
+  const hours = Math.floor(movie.minutes / 60);
+  const minutes = movie.minutes % 60;
+  game.innerHTML = `
+    <div class="choice-head"><div>
+      <h2>Choose the movie moment</h2>
+      <p class="muted">You selected Set ${setNumber}, Card ${cardNumber}. Choose a whole-movie time, then tell ${esc(config.players[owner])} the exact time so they can verify the frame.</p>
+    </div><span class="player-badge">Guesser</span></div>
+    <div class="time-grid">
+      <div><label for="hours">Hours</label><input id="hours" type="number" min="0" max="${hours}" value="0"></div>
+      <div><label for="mins">Minutes</label><input id="mins" type="number" min="0" max="59" value="1"></div>
+    </div>
+    <div class="actions">
+      <button class="primary-btn" id="show-frame" type="button">Show frame</button>
+      <button class="secondary-btn" id="back" type="button">Back</button>
+    </div>`;
+
+  $('#back').onclick = back;
+  $('#show-frame').onclick = () => {
+    const total = (+$('#hours').value || 0) * 60 + (+$('#mins').value || 0);
+    if (total < 0 || total > movie.minutes) {
+      alert('Choose a time within this movie.');
+      return;
+    }
+    const shot = imgFor(movie, total);
+    game.innerHTML = `
+      <div class="choice-head"><div>
+        <h2>Your frame</h2>
+        <p class="muted">Chosen time: ${formatTime(total)} · Frame ${shot.number}. Tell ${esc(config.players[owner])} the time, then enter your guess below.</p>
+      </div><span class="player-badge">Guesser</span></div>
+      <img class="frame" src="${shot.url}" alt="Movie frame">
+      <div class="answer-row">
+        <input id="answer" placeholder="Your movie answer" autocomplete="off">
+        <button class="primary-btn" id="check" type="button">Check guess</button>
+        <button class="secondary-btn" id="dont-know" type="button">I don't know</button>
+      </div>
+      <div id="result"></div>
+      <div class="round-nav"><button class="secondary-btn" id="back" type="button">Back to selection</button></div>`;
+
+    $('#back').onclick = back;
+    $('#check').onclick = () => finishLocalGuess(movie, false);
+    $('#dont-know').onclick = () => finishLocalGuess(movie, true);
+  };
+}
+
 function timeForm(movie, onDone, showTitle = false, back = localHome) {
   const hours = Math.floor(movie.minutes / 60);
   const minutes = movie.minutes % 60;
@@ -322,7 +400,7 @@ function worldHome() {
   const shot = imgFor(movie, minute);
   worldState = {
     active, movie, minute, shot,
-    submitted: false, submittedAt: null, correct: false, clockStart: null
+    submitted: false, submittedAt: null, correct: false, clockStart: null, started: false
   };
 
   setHeader(
@@ -330,6 +408,27 @@ function worldHome() {
     `${config.players[me]} — round ${round + 1}`,
     `${config.players[active]} is active. Everyone receives the same frame.`
   );
+
+  game.innerHTML = `
+    <div class="choice-head"><div>
+      <h2>Ready for round ${round + 1}?</h2>
+      <p class="muted">Everyone can scan their QR code and get ready here. No timer has started yet. When everyone is ready, agree on a count of 3 and tap Start round together.</p>
+    </div><span class="player-badge">${esc(config.players[active])} active</span></div>
+    <div class="result">
+      <strong>Round ${round + 1}</strong><br>
+      ${esc(config.players[active])} is the active player. Everyone else can steal if the active player misses.
+    </div>
+    <div class="actions">
+      <button class="primary-btn" id="start-world" type="button">Start round</button>
+    </div>`;
+
+  $('#start-world').onclick = startWorldRound;
+}
+
+function startWorldRound() {
+  const { active, movie, minute, shot } = worldState;
+  const activeMe = active === me;
+  worldState.started = true;
 
   game.innerHTML = `
     <div class="choice-head"><div>
