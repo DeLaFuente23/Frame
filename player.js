@@ -5,11 +5,9 @@ let localState = null;
 let worldState = null;
 
 function decode(value) {
-  value = String(value || '').replaceAll('-', '+').replaceAll('_', '/');
+  value = value.replaceAll('-', '+').replaceAll('_', '/');
   while (value.length % 4) value += '=';
-  const binary = atob(value);
-  const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes));
+  return JSON.parse(decodeURIComponent(escape(atob(value))));
 }
 
 function parseCatalog(text) {
@@ -99,83 +97,78 @@ function orderedMovies() {
   return shuffle(movies, config.seed);
 }
 
-
-function localRole() {
-  // starter is the player who guesses in round 1. Roles alternate every round.
-  const starter = Number.isInteger(config.starter) ? config.starter : (hash(config.seed) % 2);
-  const guesser = (starter + round) % 2;
-  return {
-    guesser,
-    selector: guesser === 0 ? 1 : 0,
-    amGuesser: me === guesser
-  };
-}
-
 function localPools() {
   const ordered = orderedMovies();
   return [ordered.slice(0, 84), ordered.slice(84, 168)];
 }
 
-function localRoundNumber() {
-  return round + 1;
+function worldPools() {
+  const ordered = orderedMovies();
+  return config.players.map((_, playerIndex) =>
+    ordered.filter((_, movieIndex) => movieIndex % config.players.length === playerIndex)
+  );
 }
 
-function persistRound() {
-  try {
-    localStorage.setItem(`frame:${config.seed}:${config.mode}:${me}:round`, String(round));
-  } catch {}
+function formatTime(totalMinutes) {
+  const whole = Math.floor(totalMinutes);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
 }
 
-function loadRound() {
-  try {
-    const value = Number(localStorage.getItem(`frame:${config.seed}:${config.mode}:${me}:round`));
-    if (Number.isInteger(value) && value >= 0) round = value;
-  } catch {}
+/* Local Screening ------------------------------------------------------- */
+
+function localStartingGuesser() {
+  // Deterministic for the whole game: both phones calculate the same starter.
+  return hash(`${config.seed}:local-start`) % 2;
+}
+
+function localGuesser() {
+  return (localStartingGuesser() + round) % 2;
 }
 
 function localHome() {
   clearInterval(timerId);
-  const { guesser, selector, amGuesser } = localRole();
   const pools = localPools();
-  const guesserName = config.players[guesser];
-  const selectorName = config.players[selector];
+  const guesser = localGuesser();
+  const selector = guesser === 0 ? 1 : 0;
+  const isGuesser = me === guesser;
 
   setHeader(
     'Local Screening',
-    `${config.players[me]} — Round ${localRoundNumber()}`,
-    `${guesserName} is the guesser. ${selectorName} is the selector. Roles switch automatically after each round.`
+    `${config.players[me]} — round ${round + 1}`,
+    `${config.players[guesser]} is the guesser. Roles alternate automatically each round.`
   );
 
   game.innerHTML = `
     <div class="choice-head"><div>
-      <h2>${amGuesser ? 'You are the guesser' : 'You are the selector'}</h2>
-      <p class="muted">${amGuesser
-        ? `Wait for ${selectorName} to call the set and card. Then choose a time on your phone.`
-        : `Choose a movie from ${guesserName}'s hidden 84-movie pool. You will verify the chosen time and hold the answer.`
-      }</p>
-    </div><span class="player-badge">${amGuesser ? 'Guesser' : 'Selector'}</span></div>
-    <div class="result"><strong>Round ${localRoundNumber()}</strong><br>${amGuesser
-      ? `Your job: choose the time, view the frame, and guess the movie.`
-      : `Your job: choose the movie and verify the time.`
-    }</div>
+      <h2>${isGuesser ? 'You are the guesser' : 'You are the selector'}</h2>
+      <p class="muted">${isGuesser
+        ? `Your phone will show only the frame. ${config.players[selector]} selects the movie from your hidden pool.`
+        : `Choose a movie from ${config.players[guesser]}'s hidden 84-movie pool, then help them verify the chosen time.`}
+      </p>
+    </div><span class="player-badge">${isGuesser ? 'Guesser' : 'Selector'}</span></div>
+    <div class="result">
+      <strong>Round ${round + 1}</strong><br>
+      ${esc(config.players[guesser])} guesses · ${esc(config.players[selector])} selects
+    </div>
     <div class="actions">
-      <button class="primary-btn" id="begin-round" type="button">${amGuesser ? 'Enter set & card' : 'Choose a movie'}</button>
+      <button class="primary-btn" id="start-role" type="button">${isGuesser ? 'Start guessing' : 'Choose a movie'}</button>
     </div>`;
 
-  $('#begin-round').onclick = () => {
-    if (amGuesser) guessLocal(selector, pools[me === 0 ? 0 : 1]);
+  $('#start-role').onclick = () => {
+    if (isGuesser) guessLocal(selector, pools[me]);
     else chooseLocal(guesser, pools[guesser]);
   };
 }
 
-function chooseLocal(guesser, pool) {
-  let setIndex = localState?.setIndex ?? 0;
+function chooseLocal(owner, pool) {
+  let setIndex = localState?.round === round ? localState.setIndex : 0;
+
   const draw = () => {
     const batch = pool.slice(setIndex * 7, setIndex * 7 + 7);
     game.innerHTML = `
       <div class="choice-head"><div>
         <h2>Set ${setIndex + 1} of 12</h2>
-        <p class="muted">Choose one movie. Tell ${config.players[guesser]} the set and card number only.</p>
+        <p class="muted">Choose one movie and tell ${config.players[owner]} the set and card number.</p>
       </div><span class="player-badge">Selector</span></div>
       <div class="movie-list">${batch.map((movie, i) =>
         `<button class="movie-choice" data-i="${i}" type="button"><strong>${i + 1}. ${esc(movie.en)}</strong><span>${esc(movie.es)}</span></button>`
@@ -183,155 +176,134 @@ function chooseLocal(guesser, pool) {
       <div class="round-nav">
         <button class="secondary-btn" id="prev" type="button">Previous set</button>
         <button class="secondary-btn" id="next" type="button">Next set</button>
+        <button class="secondary-btn" id="back" type="button">Back</button>
       </div>`;
 
     document.querySelectorAll('[data-i]').forEach(button => {
       button.onclick = () => {
         const movie = batch[+button.dataset.i];
-        localState = { setIndex, cardIndex: +button.dataset.i, movie };
-        selectorWaitingScreen(guesser, movie, () => chooseLocal(guesser, pool));
+        localState = { round, setIndex, cardIndex: +button.dataset.i, movie };
+        selectorWaitingScreen(owner, movie, () => chooseLocal(owner, pool));
       };
     });
 
     $('#prev').onclick = () => { setIndex = (setIndex + 11) % 12; draw(); };
     $('#next').onclick = () => { setIndex = (setIndex + 1) % 12; draw(); };
+    $('#back').onclick = localHome;
   };
+
   draw();
 }
 
-function selectorWaitingScreen(guesser, movie, back) {
+function selectorWaitingScreen(owner, movie, back) {
   game.innerHTML = `
     <div class="choice-head"><div>
       <h2>Card selected: ${localState.cardIndex + 1}</h2>
-      <p class="muted">Tell ${config.players[guesser]}: Set ${localState.setIndex + 1}, Card ${localState.cardIndex + 1}. They will choose the time on their phone.</p>
+      <p class="muted">Tell ${config.players[owner]}: Set ${localState.setIndex + 1}, Card ${localState.cardIndex + 1}. They choose the movie time on their phone and tell you the time.</p>
     </div><span class="player-badge">Selector</span></div>
     <div class="result"><strong>${esc(movie.en)}</strong><br>${esc(movie.es)}</div>
     <div class="actions">
       <button class="primary-btn" id="verify-time" type="button">Enter the chosen time</button>
       <button class="secondary-btn" id="back" type="button">Back</button>
     </div>`;
-  $('#verify-time').onclick = () => timeForm(movie, minute => localSelectorFrame(movie, minute, guesser), true, back);
+
+  $('#verify-time').onclick = () =>
+    timeForm(movie, minute => frameScreen(movie, minute, true, () => localRoundComplete()), true,
+      () => selectorWaitingScreen(owner, movie, back));
   $('#back').onclick = back;
 }
 
-function localSelectorFrame(movie, minute, guesser) {
-  const shot = imgFor(movie, minute);
+function timeForm(movie, onDone, showTitle = false, back = localHome) {
+  const hours = Math.floor(movie.minutes / 60);
+  const minutes = movie.minutes % 60;
   game.innerHTML = `
     <div class="choice-head"><div>
-      <h2>Answer holder</h2>
-      <p class="muted">Verify that ${config.players[guesser]} used the same time. This is the answer-holder's screen.</p>
-    </div><span class="player-badge">Selector</span></div>
-    <img class="frame" src="${shot.url}" alt="Movie frame">
-    <div class="result"><strong>${esc(movie.en)}</strong><br>${esc(movie.es)}<br>Chosen time: ${formatTime(minute)} · Frame ${shot.number}</div>
-    <div class="actions">
-      <button class="primary-btn" id="next-round" type="button">Next round</button>
-    </div>`;
-  $('#next-round').onclick = nextLocalRound;
-}
-
-function guessLocal(selector, myPool) {
-  game.innerHTML = `
-    <div class="choice-head"><div>
-      <h2>Enter the spoken selection</h2>
-      <p class="muted">${config.players[selector]} should tell you the set and card number. Your phone does not reveal the title.</p>
-    </div><span class="player-badge">Guesser</span></div>
+      <h2>${showTitle ? esc(movie.en) : 'Choose the moment'}</h2>
+      <p class="muted">Choose a whole-movie time from 0:00 to ${hours}:${String(minutes).padStart(2, '0')}.</p>
+    </div></div>
     <div class="time-grid">
-      <div><label for="set">Set (1–12)</label><input id="set" type="number" min="1" max="12" placeholder="1"></div>
-      <div><label for="card">Card (1–7)</label><input id="card" type="number" min="1" max="7" placeholder="1"></div>
-    </div>
-    <div class="actions">
-      <button class="primary-btn" id="continue" type="button">Choose time</button>
-    </div>`;
-  $('#continue').onclick = () => {
-    const setNumber = +$('#set').value;
-    const cardNumber = +$('#card').value;
-    if (!Number.isInteger(setNumber) || !Number.isInteger(cardNumber) ||
-        setNumber < 1 || setNumber > 12 || cardNumber < 1 || cardNumber > 7) {
-      alert('Enter a set from 1–12 and a card from 1–7.');
-      return;
-    }
-    const index = (setNumber - 1) * 7 + (cardNumber - 1);
-    const movie = myPool[index];
-    if (!movie) { alert('That set/card is not available.'); return; }
-    guessTimeScreen(selector, movie, setNumber, cardNumber);
-  };
-}
-
-function guessTimeScreen(selector, movie, setNumber, cardNumber) {
-  // The guesser does not need to know the movie runtime. Use the longest
-  // runtime in the catalog as the neutral input range and let the selector
-  // validate the actual movie/time on the other phone.
-  const maxMinutes = Math.max(...movies.map(item => item.minutes));
-  const maxHours = Math.floor(maxMinutes / 60);
-  const maxMins = maxMinutes % 60;
-
-  game.innerHTML = `
-    <div class="choice-head"><div>
-      <h2>Choose the moment</h2>
-      <p class="muted">Set ${setNumber}, Card ${cardNumber}. Choose any whole-movie time from 0:00 to ${maxHours}:${String(maxMins).padStart(2, '0')}, then tell the selector the exact time.</p>
-    </div><span class="player-badge">Guesser</span></div>
-    <div class="time-grid">
-      <div><label for="hours">Hours</label><input id="hours" type="number" min="0" max="${maxHours}" value="0"></div>
+      <div><label for="hours">Hours</label><input id="hours" type="number" min="0" max="${hours}" value="0"></div>
       <div><label for="mins">Minutes</label><input id="mins" type="number" min="0" max="59" value="1"></div>
     </div>
     <div class="actions">
       <button class="primary-btn" id="show-frame" type="button">Show frame</button>
+      <button class="secondary-btn" id="back" type="button">Back</button>
     </div>`;
 
+  $('#back').onclick = back;
   $('#show-frame').onclick = () => {
     const total = (+$('#hours').value || 0) * 60 + (+$('#mins').value || 0);
-    if (total < 0 || total > maxMinutes) {
-      alert('Choose a time within the available range.');
+    if (total < 0 || total > movie.minutes) {
+      alert('Choose a time within this movie.');
       return;
     }
-    const shot = imgFor(movie, total);
-    game.innerHTML = `
-      <div class="choice-head"><div>
-        <h2>Name this movie</h2>
-        <p class="muted">Time: ${formatTime(total)} · Frame ${shot.number}. Tell ${config.players[selector]} the time, then enter your guess.</p>
-      </div><span class="player-badge">Guesser</span></div>
-      <img class="frame" src="${shot.url}" alt="Movie frame">
+    onDone(total);
+  };
+}
+
+function frameScreen(movie, minute, holder, back = localHome) {
+  const shot = imgFor(movie, minute);
+  game.innerHTML = `
+    <div class="choice-head"><div>
+      <h2>${holder ? esc(movie.en) : 'Name this movie'}</h2>
+      <p class="muted">${holder
+        ? `Agreed time: ${formatTime(minute)} · Frame ${shot.number}. Wait for the guesser to check the answer.`
+        : 'Enter your answer, then let the selector verify it.'}</p>
+    </div></div>
+    <img class="frame" src="${shot.url}" alt="Movie frame">
+    ${holder ? '' : `
       <div class="answer-row">
         <input id="answer" placeholder="Your movie answer" autocomplete="off">
         <button class="primary-btn" id="check" type="button">Check guess</button>
         <button class="secondary-btn" id="dont-know" type="button">I don't know</button>
       </div>
-      <div id="result"></div>
-      <div class="round-nav"></div>`;
+      <div id="result"></div>`}
+    ${holder ? `<div id="result"></div>` : ''}
+    <div class="round-nav">
+      ${holder
+        ? `<button class="primary-btn" id="next-round" type="button">Next round</button>`
+        : `<button class="secondary-btn" id="back" type="button">Back to selection</button>`}
+    </div>`;
 
-    $('#check').onclick = () => {
-      const points = grade($('#answer').value, movie);
-      showLocalGuessResult(points);
-    };
-    $('#dont-know').onclick = () => {
-      showLocalGuessResult(0, true);
-    };
-  };
+  if (holder) {
+    $('#next-round').onclick = localRoundComplete;
+  } else {
+    $('#back').onclick = back;
+    $('#check').onclick = () => finishLocalGuess(movie, false);
+    $('#dont-know').onclick = () => finishLocalGuess(movie, true);
+  }
 }
 
-function showLocalGuessResult(points, dontKnow = false) {
+function finishLocalGuess(movie, dontKnow) {
+  const points = dontKnow ? 0 : grade($('#answer').value, movie);
   const result = $('#result');
-  const message = dontKnow
-    ? "I don't know — 0 points. The selector has the answer."
-    : points === 1
-      ? 'Correct — 1 point.'
-      : points === 0.5
-        ? 'Partial match — 0.5 point.'
-        : 'No match — 0 points.';
-  result.innerHTML = `<div class="result">${message}</div>`;
+  result.innerHTML = `<div class="result">${
+    dontKnow
+      ? 'I don’t know — 0 points.'
+      : points === 1
+        ? 'Correct — 1 point.'
+        : points === 0.5
+          ? 'Partial match — 0.5 point.'
+          : 'No match — 0 points.'
+  }</div>`;
+
   $('#check').disabled = true;
   $('#dont-know').disabled = true;
-  document.querySelector('.round-nav').innerHTML =
-    '<button class="primary-btn" id="next-round" type="button">Next round</button>';
-  $('#next-round').onclick = nextLocalRound;
+
+  const nav = document.createElement('div');
+  nav.className = 'round-nav';
+  nav.innerHTML = `<button class="primary-btn" id="next-round" type="button">Next round</button>`;
+  result.after(nav);
+  $('#next-round').onclick = localRoundComplete;
 }
 
-function nextLocalRound() {
+function localRoundComplete() {
   round++;
   localState = null;
-  persistRound();
   localHome();
 }
+
+/* Worldwide Premiere --------------------------------------------------- */
 
 function worldMovie() {
   const pools = worldPools();
@@ -348,7 +320,10 @@ function worldHome() {
   const { active, movie, minute } = worldMovie();
   const activeMe = active === me;
   const shot = imgFor(movie, minute);
-  worldState = { active, movie, minute, shot, submitted: false, submittedAt: null, correct: false };
+  worldState = {
+    active, movie, minute, shot,
+    submitted: false, submittedAt: null, correct: false, clockStart: null
+  };
 
   setHeader(
     'Worldwide Premiere',
@@ -361,8 +336,7 @@ function worldHome() {
       <h2>${activeMe ? 'Your 10-second turn' : 'Steal clock ready'}</h2>
       <p class="muted">${activeMe
         ? 'You have 10 seconds to answer. Other players may submit privately at any time.'
-        : 'Submit your answer privately. If the active player misses, the group compares correct submission times.'
-      }</p>
+        : 'Submit your answer privately. If the active player misses, the group compares correct submission times.'}</p>
     </div><span class="player-badge">${esc(config.players[active])} active</span></div>
     <img class="frame" src="${shot.url}" alt="Mystery movie frame">
     <div id="timer" class="timer">${activeMe ? '10.0' : '0.0'}</div>
@@ -378,23 +352,25 @@ function worldHome() {
     </div>`;
 
   startClock(activeMe);
-  $('#check').onclick = () => submitWorldAnswer(movie);
+  $('#check').onclick = () => submitWorldAnswer(movie, false);
   $('#dont-know').onclick = () => submitWorldAnswer(movie, true);
   $('#reveal').onclick = () => revealWorld(movie, minute);
-  $('#next').onclick = () => { round++; persistRound(); worldHome(); };
+  $('#next').onclick = () => { round++; worldHome(); };
 }
 
-function submitWorldAnswer(movie, dontKnow = false) {
+function submitWorldAnswer(movie, dontKnow) {
   if (worldState.submitted) return;
   worldState.submitted = true;
   worldState.submittedAt = performance.now();
   worldState.correct = !dontKnow && grade($('#answer').value, movie) === 1;
+
   const elapsed = worldState.submittedAt - worldState.clockStart;
-  clearInterval(timerId);
-  const message = dontKnow
-    ? `I don't know — locked at <strong>${(elapsed / 1000).toFixed(2)}s</strong>.`
-    : `Answer locked at <strong>${(elapsed / 1000).toFixed(2)}s</strong> — ${worldState.correct ? 'correct if the steal phase is reached.' : 'not a match.'}`;
-  $('#result').innerHTML = `<div class="result">${message}</div>`;
+  $('#result').innerHTML = `<div class="result">${
+    dontKnow
+      ? 'I don’t know — no steal eligibility.'
+      : `Answer locked at <strong>${(elapsed / 1000).toFixed(2)}s</strong> — ${worldState.correct ? 'correct if the steal phase is reached.' : 'not a match.'}`
+  }</div>`;
+
   $('#check').disabled = true;
   $('#dont-know').disabled = true;
 }
@@ -411,6 +387,7 @@ function startClock(active) {
     const elapsed = (performance.now() - worldState.clockStart) / 1000;
     const element = $('#timer');
     if (!element) return;
+
     if (active) {
       const left = Math.max(0, 10 - elapsed);
       element.textContent = left.toFixed(1);
@@ -418,7 +395,6 @@ function startClock(active) {
       if (left <= 0) {
         clearInterval(timerId);
         element.textContent = '0.0';
-        $('#result').innerHTML = '<div class="result">Time is up. The steal phase can begin.</div>';
       }
     } else {
       element.textContent = elapsed.toFixed(1);
@@ -444,16 +420,19 @@ function home() {
     me = +params.get('p');
     if (!config.players?.[me] || !config.seed) throw Error('link');
 
-    const response = await fetch(new URL('movies.txt', document.baseURI), { cache: 'no-store' });
+    const response = await fetch('movies.txt', { cache: 'no-store' });
     if (!response.ok) throw Error('catalog');
+
     movies = parseCatalog(await response.text());
-    if (movies.length !== 168) throw Error(`catalog-count:${movies.length}`);
-    loadRound();
+    if (movies.length !== 168) throw Error('catalog-count');
+
     home();
-  } catch (error) {
-    console.error('Frame failed to load:', error);
-    const reason = error?.message || String(error);
-    setHeader('Game link unavailable', 'Could not open this game', 'Check that this QR was generated from the current Frame setup page and that the site is being served.');
-    game.innerHTML = `<p class="empty-state">This game link could not be loaded.<br><span class="small">${esc(reason)}</span></p>`;
+  } catch {
+    setHeader(
+      'Game link unavailable',
+      'Could not open this game',
+      'Use a QR code generated from the setup page while the site is being served.'
+    );
+    game.innerHTML = '<p class="empty-state">This game link is incomplete or the movie catalog could not be loaded.</p>';
   }
 })();
