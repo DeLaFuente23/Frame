@@ -280,14 +280,14 @@ function guessTimeScreen(owner, movie, setNumber, cardNumber, back) {
       <div class="answer-row">
         <input id="answer" placeholder="Your movie answer" autocomplete="off">
         <button class="primary-btn" id="check" type="button">Check guess</button>
-        <button class="secondary-btn" id="dont-know" type="button">I don't know</button>
+        <button class="secondary-btn" id="reveal-answer" type="button">Reveal answer</button>
       </div>
       <div id="result"></div>
       <div class="round-nav"><button class="secondary-btn" id="back" type="button">Back to selection</button></div>`;
 
     $('#back').onclick = back;
     $('#check').onclick = () => finishLocalGuess(movie, false);
-    $('#dont-know').onclick = () => finishLocalGuess(movie, true);
+    $('#reveal-answer').onclick = () => revealLocalAnswer(movie, total, shot.number);
   };
 }
 
@@ -352,7 +352,7 @@ function frameScreen(movie, minute, holder, back = localHome) {
   }
 }
 
-function finishLocalGuess(movie, dontKnow) {
+function finishLocalGuess(movie, dontKnow = false) {
   const points = dontKnow ? 0 : grade($('#answer').value, movie);
   const result = $('#result');
   result.innerHTML = `<div class="result">${
@@ -366,7 +366,25 @@ function finishLocalGuess(movie, dontKnow) {
   }</div>`;
 
   $('#check').disabled = true;
-  $('#dont-know').disabled = true;
+  const reveal = $('#reveal-answer');
+  if (reveal) reveal.disabled = true;
+  $('#answer').disabled = true;
+
+  const nav = document.createElement('div');
+  nav.className = 'round-nav';
+  nav.innerHTML = `<button class="primary-btn" id="next-round" type="button">Next round</button>`;
+  result.after(nav);
+  $('#next-round').onclick = localRoundComplete;
+}
+
+function revealLocalAnswer(movie, minute, frameNumber) {
+  const result = $('#result');
+  result.innerHTML = `<div class="result"><strong>${esc(movie.en)}</strong><br>${esc(movie.es)}<br>Selected time: ${formatTime(minute)} · Frame ${frameNumber}</div>`;
+
+  $('#answer').value = '';
+  $('#answer').disabled = true;
+  $('#check').disabled = true;
+  $('#reveal-answer').disabled = true;
 
   const nav = document.createElement('div');
   nav.className = 'round-nav';
@@ -396,7 +414,6 @@ function worldMovie() {
 function worldHome() {
   clearInterval(timerId);
   const { active, movie, minute } = worldMovie();
-  const activeMe = active === me;
   const shot = imgFor(movie, minute);
   worldState = {
     active, movie, minute, shot,
@@ -409,13 +426,20 @@ function worldHome() {
     `${config.players[active]} is active. Everyone receives the same frame.`
   );
 
+  // Only the very first round needs a shared ready/start window. After that,
+  // the previous round's Next round button is the group's cue to begin again.
+  if (round > 0) {
+    startWorldRound();
+    return;
+  }
+
   game.innerHTML = `
     <div class="choice-head"><div>
-      <h2>Ready for round ${round + 1}?</h2>
+      <h2>Ready for round 1?</h2>
       <p class="muted">Everyone can scan their QR code and get ready here. No timer has started yet. When everyone is ready, agree on a count of 3 and tap Start round together.</p>
     </div><span class="player-badge">${esc(config.players[active])} active</span></div>
     <div class="result">
-      <strong>Round ${round + 1}</strong><br>
+      <strong>Round 1</strong><br>
       ${esc(config.players[active])} is the active player. Everyone else can steal if the active player misses.
     </div>
     <div class="actions">
@@ -466,7 +490,9 @@ function submitWorldAnswer(movie, dontKnow) {
   const elapsed = worldState.submittedAt - worldState.clockStart;
   $('#result').innerHTML = `<div class="result">${
     dontKnow
-      ? 'I don’t know — no steal eligibility.'
+      ? (worldState.active === me
+        ? 'I don’t know — answer locked.'
+        : 'I don’t know — no steal eligibility.')
       : `Answer locked at <strong>${(elapsed / 1000).toFixed(2)}s</strong> — ${worldState.correct ? 'correct if the steal phase is reached.' : 'not a match.'}`
   }</div>`;
 
