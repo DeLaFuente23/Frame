@@ -78,13 +78,21 @@ function distance(a, b) {
 
 function grade(answer, movie) {
   const given = words(answer);
+  if (!given.length) return false;
+
   let best = 0;
   for (const title of [movie.en, movie.es]) {
     const expected = words(title);
-    const matches = expected.filter(word => given.some(other => word === other || (word.length > 3 && distance(word, other) <= 1))).length;
+    const matches = expected.filter(word =>
+      given.some(other => word === other || (word.length > 3 && distance(word, other) <= 1))
+    ).length;
     best = Math.max(best, matches / Math.max(1, expected.length));
   }
-  return best >= 0.5 ? 1 : best > 0 ? 0.5 : 0;
+
+  // A title is correct when at least half of its meaningful words are matched.
+  // This is intentionally forgiving enough for normal party-game answers while
+  // still requiring more than a vague partial resemblance.
+  return best >= 0.5;
 }
 
 function setHeader(badge, title, intro) {
@@ -347,23 +355,15 @@ function frameScreen(movie, minute, holder, back = localHome) {
     $('#next-round').onclick = localRoundComplete;
   } else {
     $('#back').onclick = back;
-    $('#check').onclick = () => finishLocalGuess(movie, false);
-    $('#dont-know').onclick = () => finishLocalGuess(movie, true);
+    $('#check').onclick = () => finishLocalGuess(movie);
+    $('#dont-know').onclick = () => revealLocalAnswer(movie, minute, shot.number);
   }
 }
 
-function finishLocalGuess(movie, dontKnow = false) {
-  const points = dontKnow ? 0 : grade($('#answer').value, movie);
+function finishLocalGuess(movie) {
+  const correct = grade($('#answer').value, movie);
   const result = $('#result');
-  result.innerHTML = `<div class="result">${
-    dontKnow
-      ? 'I don’t know — 0 points.'
-      : points === 1
-        ? 'Correct — 1 point.'
-        : points === 0.5
-          ? 'Partial match — 0.5 point.'
-          : 'No match — 0 points.'
-  }</div>`;
+  result.innerHTML = `<div class="result ${correct ? 'correct' : 'incorrect'}"><strong>${correct ? 'Correct' : 'Incorrect'}</strong></div>`;
 
   $('#check').disabled = true;
   const reveal = $('#reveal-answer');
@@ -379,7 +379,7 @@ function finishLocalGuess(movie, dontKnow = false) {
 
 function revealLocalAnswer(movie, minute, frameNumber) {
   const result = $('#result');
-  result.innerHTML = `<div class="result"><strong>${esc(movie.en)}</strong><br>${esc(movie.es)}<br>Selected time: ${formatTime(minute)} · Frame ${frameNumber}</div>`;
+  result.innerHTML = `<div class="result revealed"><strong>${esc(movie.en)}</strong><br>${esc(movie.es)}<br>Selected time: ${formatTime(minute)} · Frame ${frameNumber}</div>`;
 
   $('#answer').value = '';
   $('#answer').disabled = true;
@@ -483,18 +483,18 @@ function startWorldRound() {
 
 function submitWorldAnswer(movie, dontKnow) {
   if (worldState.submitted) return;
+
+  clearInterval(timerId);
   worldState.submitted = true;
   worldState.submittedAt = performance.now();
-  worldState.correct = !dontKnow && grade($('#answer').value, movie) === 1;
+  worldState.correct = !dontKnow && grade($('#answer').value, movie);
 
   const elapsed = worldState.submittedAt - worldState.clockStart;
-  $('#result').innerHTML = `<div class="result">${
-    dontKnow
-      ? (worldState.active === me
-        ? 'I don’t know — answer locked.'
-        : 'I don’t know — no steal eligibility.')
-      : `Answer locked at <strong>${(elapsed / 1000).toFixed(2)}s</strong> — ${worldState.correct ? 'correct if the steal phase is reached.' : 'not a match.'}`
-  }</div>`;
+  if (dontKnow) {
+    $('#result').innerHTML = `<div class="result incorrect"><strong>${worldState.active === me ? 'No answer' : 'No steal eligibility'}</strong></div>`;
+  } else {
+    $('#result').innerHTML = `<div class="result ${worldState.correct ? 'correct' : 'incorrect'}"><strong>${worldState.correct ? 'Correct' : 'Incorrect'}</strong><br><span class="muted">Answer submitted at ${(elapsed / 1000).toFixed(2)}s.</span></div>`;
+  }
 
   $('#check').disabled = true;
   $('#dont-know').disabled = true;
@@ -502,7 +502,7 @@ function submitWorldAnswer(movie, dontKnow) {
 
 function revealWorld(movie, minute) {
   clearInterval(timerId);
-  $('#result').innerHTML = `<div class="result"><strong>${esc(movie.en)}</strong><br>${esc(movie.es)}<br>Selected time: ${formatTime(minute)} · Frame ${imgFor(movie, minute).number}</div>`;
+  $('#result').innerHTML = `<div class="result revealed"><strong>${esc(movie.en)}</strong><br>${esc(movie.es)}<br>Selected time: ${formatTime(minute)} · Frame ${imgFor(movie, minute).number}</div>`;
 }
 
 function startClock(active) {
